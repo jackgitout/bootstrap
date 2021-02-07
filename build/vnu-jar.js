@@ -9,48 +9,59 @@
 
 'use strict'
 
-const { execFile, spawn } = require('child_process')
+const childProcess = require('child_process')
+const { promisify } = require('util')
+const execFile = promisify(childProcess.execFile)
 const vnu = require('vnu-jar')
 
-execFile('java', ['-version'], (error, stdout, stderr) => {
-  if (error) {
-    console.error('Skipping vnu-jar test; Java is missing.')
-    return
+// vnu-jar accepts multiple ignores joined with a `|`.
+// Also note that the ignores are string regular expressions.
+const ignores = [
+  // "autocomplete" is included in <button> and checkboxes and radio <input>s due to
+  // Firefox's non-standard autocomplete behavior - see https://bugzilla.mozilla.org/show_bug.cgi?id=654072
+  'Attribute “autocomplete” is only allowed when the input type is.*',
+  'Attribute “autocomplete” not allowed on element “button” at this point.',
+  // Content → Reboot uses various date/time inputs as a visual example.
+  // Documentation does not rely on them being usable.
+  'The “(?:date|week|month|color|datetime-local|time)” input type is not supported in all browsers.*'
+].join('|')
+
+async function isJavaAvailable() {
+  return execFile('java', ['-version'])
+}
+
+(async () => {
+  try {
+    let hasJava
+
+    try {
+      hasJava = await isJavaAvailable()
+    } catch {
+      console.warn('Skipping vnu-jar test; Java is missing.')
+      return
+    }
+
+    const is32bitJava = !/64-Bit/.test(hasJava.stderr)
+
+    const args = [
+      '-jar',
+      `"${vnu}"`,
+      '--asciiquotes',
+      '--skip-non-html',
+      '--Werror',
+      `--filterpattern "${ignores}"`,
+      '_gh_pages/',
+      'js/tests/'
+    ]
+
+    // For the 32-bit Java we need to pass `-Xss512k`
+    if (is32bitJava) {
+      args.splice(0, 0, '-Xss512k')
+    }
+
+    return execFile('java', args, { shell: true })
+  } catch (error) {
+    console.error(error)
+    process.exit(1)
   }
-
-  const is32bitJava = !/64-Bit/.test(stderr)
-
-  // vnu-jar accepts multiple ignores joined with a `|`.
-  // Also note that the ignores are regular expressions.
-  const ignores = [
-    // "autocomplete" is included in <button> and checkboxes and radio <input>s due to
-    // Firefox's non-standard autocomplete behavior - see https://bugzilla.mozilla.org/show_bug.cgi?id=654072
-    'Attribute “autocomplete” is only allowed when the input type is.*',
-    'Attribute “autocomplete” not allowed on element “button” at this point.',
-    // Content → Reboot uses various date/time inputs as a visual example.
-    // Documentation does not rely on them being usable.
-    'The “(?:date|week|month|color|datetime-local|time)” input type is not supported in all browsers.*'
-  ].join('|')
-
-  const args = [
-    '-jar',
-    `"${vnu}"`,
-    '--asciiquotes',
-    '--skip-non-html',
-    '--Werror',
-    `--filterpattern "${ignores}"`,
-    '_gh_pages/',
-    'js/tests/'
-  ]
-
-  // For the 32-bit Java we need to pass `-Xss512k`
-  if (is32bitJava) {
-    args.splice(0, 0, '-Xss512k')
-  }
-
-  return spawn('java', args, {
-    shell: true,
-    stdio: 'inherit'
-  })
-    .on('exit', process.exit)
-})
+})()
